@@ -12,6 +12,7 @@ from pymodbus.pdu.register_message import (
 from custom_components.modbus_local_gateway.conversion import (
     Conversion,
     InvalidDataTypeError,
+    InvalidValue,
     NotSupportedError,
 )
 from custom_components.modbus_local_gateway.entity_management.base import (
@@ -290,23 +291,114 @@ async def test_enum() -> None:
 
 @pytest.mark.asyncio
 async def test_enum_missing() -> None:
-    """Test enum conversion"""
+    """An unmapped value is rejected, not returned as None.
+
+    It used to return None, which the sensor read as "no update" - so the entity
+    kept showing its previous reading indefinitely, with nothing logged.
+    """
     client = AsyncModbusTcpClient
     conversion = Conversion(client=client)
 
-    value = conversion.convert_from_response(
-        response=ReadInputRegistersResponse(
-            registers=client.convert_to_registers(7, data_type=client.DATATYPE.UINT16)
-        ),
-        desc=ModbusSensorEntityDescription(
-            register_address=1,
-            key="test",
-            conv_map={1: "One", 3: "three", 4: "Four", 5: "Good"},
-            data_type=ModbusDataType.INPUT_REGISTER,
-        ),
+    with pytest.raises(InvalidValue) as err:
+        conversion.convert_from_response(
+            response=ReadInputRegistersResponse(
+                registers=client.convert_to_registers(
+                    7, data_type=client.DATATYPE.UINT16
+                )
+            ),
+            desc=ModbusSensorEntityDescription(
+                register_address=1,
+                key="test",
+                conv_map={1: "One", 3: "three", 4: "Four", 5: "Good"},
+                data_type=ModbusDataType.INPUT_REGISTER,
+            ),
+        )
+
+    assert err.value.value == 7
+
+
+@pytest.mark.parametrize(
+    ("raw", "invalid", "expected"),
+    [
+        (255, [255], True),
+        (0, [255, 0], True),
+        (45, [255, 0], False),
+        (255, None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_values(raw: int, invalid: list[int] | None, expected: bool) -> None:
+    """`invalid_values` rejects the listed raw values and passes everything else."""
+    client = AsyncModbusTcpClient
+    conversion = Conversion(client=client)
+    desc = ModbusSensorEntityDescription(
+        register_address=1,
+        key="test",
+        conv_invalid_values=invalid,
+        data_type=ModbusDataType.INPUT_REGISTER,
+    )
+    response = ReadInputRegistersResponse(
+        registers=client.convert_to_registers(raw, data_type=client.DATATYPE.UINT16)
     )
 
-    assert value is None
+    if expected:
+        with pytest.raises(InvalidValue):
+            conversion.convert_from_response(response=response, desc=desc)
+    else:
+        assert conversion.convert_from_response(response=response, desc=desc) == raw
+
+
+@pytest.mark.asyncio
+async def test_invalid_values_matches_before_multiplier() -> None:
+    """The match is against the raw register, not the scaled reading.
+
+    Datasheets document sentinels as raw register contents, so the config lists
+    255 even when a multiplier would turn it into 25.5.
+    """
+    client = AsyncModbusTcpClient
+    conversion = Conversion(client=client)
+    desc = ModbusSensorEntityDescription(
+        register_address=1,
+        key="test",
+        conv_invalid_values=[255],
+        conv_multiplier=0.1,
+        data_type=ModbusDataType.INPUT_REGISTER,
+    )
+
+    with pytest.raises(InvalidValue):
+        conversion.convert_from_response(
+            response=ReadInputRegistersResponse(
+                registers=client.convert_to_registers(
+                    255, data_type=client.DATATYPE.UINT16
+                )
+            ),
+            desc=desc,
+        )
+
+
+@pytest.mark.asyncio
+async def test_invalid_values_matches_after_masking() -> None:
+    """The match is against the masked field, not the whole register."""
+    client = AsyncModbusTcpClient
+    conversion = Conversion(client=client)
+    desc = ModbusSensorEntityDescription(
+        register_address=1,
+        key="test",
+        conv_bits=8,
+        conv_shift_bits=0,
+        conv_invalid_values=[255],
+        data_type=ModbusDataType.INPUT_REGISTER,
+    )
+
+    with pytest.raises(InvalidValue):
+        conversion.convert_from_response(
+            response=ReadInputRegistersResponse(
+                registers=client.convert_to_registers(
+                    (30 << 8) | 255, data_type=client.DATATYPE.UINT16
+                )
+            ),
+            desc=desc,
+        )
 
 
 @pytest.mark.asyncio
