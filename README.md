@@ -188,6 +188,21 @@ For all entity definitions:
       ```
 - **Behavior**:
   - `never_resets: true`: For non-resetting totals. (E.g. for sensors with `state_class: total_increasing`).
+  - `invalid_values`: Register values that mean "no reading" rather than a reading. Many devices
+    publish a sentinel - commonly `0xFFFF`, `0xFF` or `0` - when a sensor is absent or a function
+    is inactive. Listing them makes the entity **unavailable** for as long as the device reports
+    one, instead of publishing the sentinel as if it were real. That matters most for entities with
+    a `state_class`, because an unavailable entity records nothing while a published sentinel goes
+    into long-term statistics and skews it.
+    - Matched against the **raw register value** - after any `bits` / `shift_bits` masking, but
+      before `multiplier` and `offset` - so you list the number the datasheet documents.
+    - E.g.
+      ```yaml
+      invalid_values: [255, 0]
+      ```
+  - A value with no matching `map:` entry is treated the same way: the entity goes unavailable and
+    the unmapped value is logged. It previously kept its previous reading indefinitely, with nothing
+    logged to say so.
 
 #### Coil Properties (`read_write_boolean`, `read_only_boolean`)
 - **Control Types** (only for `read_write_boolean`): Allows the user to control the value.
