@@ -321,13 +321,12 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
                     # Deliberately not added to `data`: the platforms' "is not None"
                     # guard then skips the update, and availability comes from
                     # ModbusCoordinatorEntity.available.
-                    if entity.desc.key not in self._invalid_keys:
-                        _LOGGER.warning(
-                            "%s is unavailable: %s (%s)",
-                            entity.desc.key,
-                            err.reason,
-                            err.value,
-                        )
+                    _LOGGER.debug(
+                        "%s is unavailable: %s (%s)",
+                        entity.desc.key,
+                        err.reason,
+                        err.value,
+                    )
                     self._invalid_keys.add(entity.desc.key)
                 except Exception:  # pylint: disable=broad-exception-caught
                     _LOGGER.debug(
