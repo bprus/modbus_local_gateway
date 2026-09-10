@@ -29,20 +29,30 @@ class InvalidDataTypeError(Exception):
 
 
 class InvalidValue(Exception):
-    """The device reported something that is not a reading.
+    """The config could not turn the register's answer into the usual value.
 
-    Two cases produce this, and they are the same problem: the device said
-    something the config cannot turn into a value.
+    Two cases raise this, and they are not the same:
 
-    - the raw register matched one of the entity's `invalid_values`
-    - a `map:` had no entry for the value the register returned
+    - the raw register matched one of the entity's `invalid_values`. That is the
+      device saying "no reading", so the entity goes unavailable.
+    - a `map:` had no entry for the value. The reading is real, only unnamed, so
+      `fallback` carries the number and the entity keeps it rather than losing it.
+
+    `fallback` is None when there is nothing worth publishing.
     """
 
-    def __init__(self, desc: ModbusEntityDescription, value: Any, reason: str) -> None:
+    def __init__(
+        self,
+        desc: ModbusEntityDescription,
+        value: Any,
+        reason: str,
+        fallback: Any = None,
+    ) -> None:
         super().__init__(f"{desc.key}: {reason} ({value})")
         self.desc = desc
         self.value = value
         self.reason = reason
+        self.fallback = fallback
 
 
 class Conversion:
@@ -158,8 +168,8 @@ class Conversion:
             return value
         # An unmapped value used to fall through as None, which the sensor read as
         # "no update" - leaving the entity showing its previous reading, silently and
-        # indefinitely. A code the map does not cover is not a reading, so say so.
-        raise InvalidValue(desc, int_val, "no `map:` entry for value")
+        # indefinitely. The reading itself is real, so publish the number.
+        raise InvalidValue(desc, int_val, "no `map:` entry for value", fallback=int_val)
 
     def _convert_to_flags(
         self, registers: list[int], desc: ModbusEntityDescription

@@ -309,6 +309,8 @@ async def test_enum_missing() -> None:
         )
 
     assert err.value.value == 7
+    # The reading is real, only unnamed - the number rides along so it is not lost.
+    assert err.value.fallback == 7
 
 
 @pytest.mark.parametrize(

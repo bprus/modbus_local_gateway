@@ -200,9 +200,10 @@ For all entity definitions:
       ```yaml
       invalid_values: [255, 0]
       ```
-  - A value with no matching `map:` entry is treated the same way: the entity goes unavailable and
-    the unmapped value is logged. It previously kept its previous reading indefinitely, with nothing
-    logged to say so.
+  - A value with no matching `map:` entry is **published as the raw number** and logged once. The
+    reading is real, only unnamed, so it is not lost - unlike `invalid_values`, which means the
+    device is reporting no reading at all. Previously an unmapped value made the entity keep its
+    previous reading indefinitely, with nothing logged to say so.
 
 #### Coil Properties (`read_write_boolean`, `read_only_boolean`)
 - **Control Types** (only for `read_write_boolean`): Allows the user to control the value.
