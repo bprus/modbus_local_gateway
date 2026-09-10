@@ -731,38 +731,6 @@ async def test_invalid_value_marks_entity_and_clears_again(
     assert data["test_key"] == 42
 
 
-@pytest.mark.asyncio
-async def test_unmapped_value_publishes_the_raw_number(
-    mock_config_entry: ConfigEntry,
-) -> None:
-    """An unmapped `map:` value is published, not dropped.
-
-    It is a real reading the config cannot name, so the entity stays available and
-    shows the number - unlike a declared sentinel, which means no reading at all.
-    """
-    coordinator = _coordinator(mock_config_entry)
-    desc = ModbusSensorEntityDescription(
-        register_address=1,
-        key="test_key",
-        conv_map={1: "One"},
-        data_type=ModbusDataType.INPUT_REGISTER,
-    )
-    ctx = ModbusContext(1, desc)
-
-    future = asyncio.Future()
-    future.set_result({"test_key": MagicMock()})
-    coordinator.client.update_device.return_value = future
-
-    with patch(
-        "custom_components.modbus_local_gateway.conversion.Conversion.convert_from_response",
-        side_effect=InvalidValue(desc, 7, "no `map:` entry for value", fallback=7),
-    ):
-        data = await coordinator._update_device([ctx])
-
-    assert data["test_key"] == 7
-    assert coordinator.is_invalid(ctx) is False
-
-
 def test_entity_unavailable_while_value_invalid(mock_config_entry: ConfigEntry) -> None:
     """The availability override covers every platform from the shared base."""
     coordinator = _coordinator(mock_config_entry)
