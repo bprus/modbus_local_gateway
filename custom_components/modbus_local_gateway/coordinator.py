@@ -222,13 +222,7 @@ class ModbusCoordinatorEntity(CoordinatorEntity):
 
     @property
     def available(self) -> bool:
-        """Unavailable while the device is reporting a non-value for this entity.
-
-        Overridden here rather than in each platform: all six read the coordinator
-        through the same `if value is not None` guard, so an explicit marker passed
-        through `get_data` would have been mistaken for a real reading by every one
-        of them.
-        """
+        """Unavailable while the device is reporting a non-value for this entity."""
         if not super().available:
             return False
         return not cast(ModbusCoordinator, self.coordinator).is_invalid(
@@ -258,9 +252,7 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
         self._gateway: str = gateway
         self._max_read_size: int = 1
         self._gateway_device: dr.DeviceEntry | None = gateway_device
-        # Entities whose most recent read was not a usable value. Kept separate from
-        # `data` because a missing key already means "nothing cached yet"; this means
-        # "the device answered, and the answer was not a reading".
+        # Entities whose most recent read was not a usable value.
         self._invalid_keys: set[str] = set()
 
         super().__init__(
@@ -326,9 +318,9 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
                     self._invalid_keys.discard(entity.desc.key)
                     _LOGGER.debug("Value for key %s is %s", entity.desc.key, value)
                 except InvalidValue as err:
-                    # Leave the key out of `data` so every platform's existing
-                    # "if value is not None" guard skips the update untouched; the
-                    # entity goes unavailable via ModbusCoordinatorEntity.available.
+                    # Deliberately left out of `data`: the platforms' "is not None"
+                    # guard then skips the update, and availability comes from
+                    # ModbusCoordinatorEntity.available.
                     if entity.desc.key not in self._invalid_keys:
                         # Log on the transition only - this repeats every poll.
                         _LOGGER.warning(

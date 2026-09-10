@@ -112,10 +112,7 @@ class ModbusEntityDescription(
         """`invalid_values` must be a list of whole numbers.
 
         They are matched against the raw register value - after any `bits` /
-        `shift_bits` masking, but before `multiplier` and `offset`. Vendors
-        document sentinels as raw register contents rather than scaled
-        readings, so matching raw keeps the config readable next to the
-        datasheet.
+        `shift_bits` masking, but before `multiplier` and `offset`.
         """
         if self.conv_invalid_values is None:
             return True
