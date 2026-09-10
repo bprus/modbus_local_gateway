@@ -322,7 +322,6 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
                     # guard then skips the update, and availability comes from
                     # ModbusCoordinatorEntity.available.
                     if entity.desc.key not in self._invalid_keys:
-                        # Once per transition, not every poll.
                         _LOGGER.warning(
                             "%s is unavailable: %s (%s)",
                             entity.desc.key,
