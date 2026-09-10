@@ -36,9 +36,6 @@ class InvalidValue(Exception):
 
     - the raw register matched one of the entity's `invalid_values`
     - a `map:` had no entry for the value the register returned
-
-    Raising rather than returning None keeps it distinguishable from "no data
-    cached yet", which is what None already means to the coordinator.
     """
 
     def __init__(self, desc: ModbusEntityDescription, value: Any, reason: str) -> None:
@@ -153,7 +150,7 @@ class Conversion:
 
     def _convert_to_enum(
         self, registers: list, desc: ModbusEntityDescription
-    ) -> str | None:
+    ) -> str:
         """Convert to an enum type"""
         int_val: int = int(self._convert_to_decimal(registers=registers, desc=desc))
         if desc.conv_map and int_val in desc.conv_map:
