@@ -29,13 +29,9 @@ class InvalidDataTypeError(Exception):
 
 
 class InvalidValue(Exception):
-    """The device reported something that is not a reading.
+    """The device reported a value that means "no reading".
 
-    Two cases produce this, and they are the same problem: the device said
-    something the config cannot turn into a value.
-
-    - the raw register matched one of the entity's `invalid_values`
-    - a `map:` had no entry for the value the register returned
+    Raised when the raw register matches one of the entity's `invalid_values`.
     """
 
     def __init__(self, desc: ModbusEntityDescription, value: Any, reason: str) -> None:
@@ -150,16 +146,14 @@ class Conversion:
 
     def _convert_to_enum(
         self, registers: list, desc: ModbusEntityDescription
-    ) -> str:
-        """Convert to an enum type"""
+    ) -> str | int:
+        """Convert to an enum type, falling back to the raw value when unmapped."""
         int_val: int = int(self._convert_to_decimal(registers=registers, desc=desc))
         if desc.conv_map and int_val in desc.conv_map:
             value: str = desc.conv_map[int_val]
             return value
-        # An unmapped value used to fall through as None, which the sensor read as
-        # "no update" - leaving the entity showing its previous reading, silently and
-        # indefinitely. A code the map does not cover is not a reading, so say so.
-        raise InvalidValue(desc, int_val, "no `map:` entry for value")
+        _LOGGER.debug("%s: no `map:` entry for %s", desc.key, int_val)
+        return int_val
 
     def _convert_to_flags(
         self, registers: list[int], desc: ModbusEntityDescription

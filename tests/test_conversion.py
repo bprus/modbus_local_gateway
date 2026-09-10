@@ -285,30 +285,28 @@ async def test_enum() -> None:
 
 @pytest.mark.asyncio
 async def test_enum_missing() -> None:
-    """An unmapped value is rejected, not returned as None.
+    """An unmapped value falls back to the raw number.
 
     It used to return None, which the sensor read as "no update" - so the entity
-    kept showing its previous reading indefinitely, with nothing logged.
+    kept showing its previous reading indefinitely, with nothing logged. The
+    reading is real, only unnamed, so it is published rather than lost.
     """
     client = AsyncModbusTcpClient
     conversion = Conversion(client=client)
 
-    with pytest.raises(InvalidValue) as err:
-        conversion.convert_from_response(
-            response=ReadInputRegistersResponse(
-                registers=client.convert_to_registers(
-                    7, data_type=client.DATATYPE.UINT16
-                )
-            ),
-            desc=ModbusSensorEntityDescription(
-                register_address=1,
-                key="test",
-                conv_map={1: "One", 3: "three", 4: "Four", 5: "Good"},
-                data_type=ModbusDataType.INPUT_REGISTER,
-            ),
-        )
+    value = conversion.convert_from_response(
+        response=ReadInputRegistersResponse(
+            registers=client.convert_to_registers(7, data_type=client.DATATYPE.UINT16)
+        ),
+        desc=ModbusSensorEntityDescription(
+            register_address=1,
+            key="test",
+            conv_map={1: "One", 3: "three", 4: "Four", 5: "Good"},
+            data_type=ModbusDataType.INPUT_REGISTER,
+        ),
+    )
 
-    assert err.value.value == 7
+    assert value == 7
 
 
 @pytest.mark.parametrize(
