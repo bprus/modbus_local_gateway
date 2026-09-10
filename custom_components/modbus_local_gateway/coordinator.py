@@ -254,8 +254,6 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
         self._gateway_device: dr.DeviceEntry | None = gateway_device
         # Entities whose most recent read was not a usable value.
         self._invalid_keys: set[str] = set()
-        # Entities already logged about, so the warning does not repeat every poll.
-        self._reported_keys: set[str] = set()
 
         super().__init__(
             hass,
@@ -318,35 +316,33 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
                     )
                     data[entity.desc.key] = value
                     self._invalid_keys.discard(entity.desc.key)
-                    self._reported_keys.discard(entity.desc.key)
                     _LOGGER.debug("Value for key %s is %s", entity.desc.key, value)
                 except InvalidValue as err:
-                    first = entity.desc.key not in self._reported_keys
-                    self._reported_keys.add(entity.desc.key)
                     if err.fallback is not None:
                         # A real reading the config cannot name. Publish the number
-                        # rather than lose it; the entity stays available.
+                        # rather than lose it; the entity stays available, so the
+                        # state itself is the signal and debug is level enough.
                         data[entity.desc.key] = err.fallback
                         self._invalid_keys.discard(entity.desc.key)
-                        if first:
-                            _LOGGER.warning(
-                                "%s: %s (%s) - publishing the raw value",
-                                entity.desc.key,
-                                err.reason,
-                                err.value,
-                            )
+                        _LOGGER.debug(
+                            "%s: %s (%s) - publishing the raw value",
+                            entity.desc.key,
+                            err.reason,
+                            err.value,
+                        )
                     else:
                         # Not a reading. Deliberately left out of `data`: the
                         # platforms' "is not None" guard then skips the update, and
                         # availability comes from ModbusCoordinatorEntity.available.
-                        self._invalid_keys.add(entity.desc.key)
-                        if first:
+                        # Warn once - the entity vanishes, so the log is the only trace.
+                        if entity.desc.key not in self._invalid_keys:
                             _LOGGER.warning(
                                 "%s is unavailable: %s (%s)",
                                 entity.desc.key,
                                 err.reason,
                                 err.value,
                             )
+                        self._invalid_keys.add(entity.desc.key)
                 except Exception:  # pylint: disable=broad-exception-caught
                     _LOGGER.debug(
                         "Data not available for key: %s (%d)",

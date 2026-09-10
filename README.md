@@ -200,7 +200,7 @@ For all entity definitions:
       ```yaml
       invalid_values: [255, 0]
       ```
-  - A value with no matching `map:` entry is **published as the raw number** and logged once. The
+  - A value with no matching `map:` entry is **published as the raw number** (logged at debug). The
     reading is real, only unnamed, so it is not lost - unlike `invalid_values`, which means the
     device is reporting no reading at all. Previously an unmapped value made the entity keep its
     previous reading indefinitely, with nothing logged to say so.
