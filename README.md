@@ -170,7 +170,8 @@ For all entity definitions:
   - `offset`: Adds an offset (float).
 - **Display**:
   - `precision`: Decimal places (integer). Only valid for `sensor` or `control: number` entities.
-  - `map`: Enum mapping.
+  - `map`: Enum mapping. A value with no entry falls back to the raw number, so the state is
+    either a label or a bare number.
     - E.g.
       ```yaml
       map:
@@ -188,24 +189,15 @@ For all entity definitions:
       ```
 - **Behavior**:
   - `never_resets: true`: For non-resetting totals. (E.g. for sensors with `state_class: total_increasing`).
-  - `invalid_values`: Register values that mean "no reading" rather than a reading. Many devices
-    publish a sentinel - commonly `0xFFFF`, `0xFF` or `0` - when a sensor is absent or a function
-    is inactive. Listing them makes the entity **unavailable** for as long as the device reports
-    one, instead of publishing the sentinel as if it were real. That matters most for entities with
-    a `state_class`, because an unavailable entity records nothing while a published sentinel goes
-    into long-term statistics and skews it.
-    - Matched against the **raw register value** - after any `bits` / `shift_bits` masking, but
-      before `multiplier` and `offset` - so you list the number the datasheet documents.
+  - `invalid_values`: Register values that mean "no reading" - the sentinel many devices publish
+    (commonly `0xFFFF`, `0xFF` or `0`) when a sensor is absent or a function is inactive. The entity
+    goes **unavailable** while one is reported, which also keeps it out of long-term statistics.
+    Matched against the **raw register value**: after `bits` / `shift_bits`, before `multiplier` and
+    `offset`.
     - E.g.
       ```yaml
       invalid_values: [255, 0]
       ```
-  - A value with no matching `map:` entry is **published as the raw number**. The reading is real,
-    only unnamed, so it is not lost - unlike `invalid_values`, which means the device is reporting
-    no reading at all. Previously an unmapped value made the entity keep its previous reading
-    indefinitely, with nothing to say so.
-    - The entity's state is therefore either a mapped label or a bare number; anything reading it
-      should tolerate both.
 
 #### Coil Properties (`read_write_boolean`, `read_only_boolean`)
 - **Control Types** (only for `read_write_boolean`): Allows the user to control the value.

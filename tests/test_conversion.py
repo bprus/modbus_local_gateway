@@ -285,12 +285,7 @@ async def test_enum() -> None:
 
 @pytest.mark.asyncio
 async def test_enum_missing() -> None:
-    """An unmapped value falls back to the raw number.
-
-    It used to return None, which the sensor read as "no update" - so the entity
-    kept showing its previous reading indefinitely, with nothing logged. The
-    reading is real, only unnamed, so it is published rather than lost.
-    """
+    """An unmapped value falls back to the raw number."""
     client = AsyncModbusTcpClient
     conversion = Conversion(client=client)
 
