@@ -189,14 +189,14 @@ For all entity definitions:
       ```
 - **Behavior**:
   - `never_resets: true`: For non-resetting totals. (E.g. for sensors with `state_class: total_increasing`).
-  - `invalid_values`: Register values that mean "no reading" - the sentinel many devices publish
+  - `unavailable_values`: Register values that mean "no reading" - the sentinel many devices publish
     (commonly `0xFFFF`, `0xFF` or `0`) when a sensor is absent or a function is inactive. The entity
     goes **unavailable** while one is reported, which also keeps it out of long-term statistics.
     Matched against the **raw register value**: after `bits` / `shift_bits`, before `multiplier` and
     `offset`.
     - E.g.
       ```yaml
-      invalid_values: [255, 0]
+      unavailable_values: [255, 0]
       ```
 
 #### Coil Properties (`read_write_boolean`, `read_only_boolean`)

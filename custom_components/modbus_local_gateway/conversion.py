@@ -28,10 +28,10 @@ class InvalidDataTypeError(Exception):
     """Invalid data type for conversion"""
 
 
-class InvalidValue(Exception):
+class ValueUnavailable(Exception):
     """The device reported a value that means "no reading".
 
-    Raised when the raw register matches one of the entity's `invalid_values`.
+    Raised when the raw register matches one of the entity's `unavailable_values`.
     """
 
     def __init__(self, desc: ModbusEntityDescription, value: Any, reason: str) -> None:
@@ -190,7 +190,7 @@ class Conversion:
             num = sum(r * s for r, s in zip(num, desc.conv_sum_scale))
 
         if isinstance(num, float):
-            self._reject_invalid_value(num, desc)
+            self._reject_unavailable_value(num, desc)
             return num
 
         if isinstance(num, int):
@@ -198,23 +198,23 @@ class Conversion:
                 num = num >> desc.conv_shift_bits
             if desc.conv_bits:
                 num = num & int("1" * desc.conv_bits, 2)
-            self._reject_invalid_value(num, desc)
+            self._reject_unavailable_value(num, desc)
             return num
         raise InvalidDataTypeError(
             f"Invalid data type for conversion: {type(num).__name__}"
         )
 
-    def _reject_invalid_value(
+    def _reject_unavailable_value(
         self, num: int | float, desc: ModbusEntityDescription
     ) -> None:
-        """Raise if the raw register value is one the entity declares meaningless.
+        """Raise if the raw register value is one the entity declares unavailable.
 
         Checked after `bits` / `shift_bits` masking but before `multiplier` and
         `offset`, so the config lists the value the datasheet documents rather
         than a scaled one.
         """
-        if desc.conv_invalid_values and num in desc.conv_invalid_values:
-            raise InvalidValue(desc, num, "declared in `invalid_values`")
+        if desc.conv_unavailable_values and num in desc.conv_unavailable_values:
+            raise ValueUnavailable(desc, num, "declared in `unavailable_values`")
 
     def _apply_conversion_operations(
         self, num: int | float, desc: ModbusEntityDescription
