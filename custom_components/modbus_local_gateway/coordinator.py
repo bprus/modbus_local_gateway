@@ -318,11 +318,11 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
                     self._invalid_keys.discard(entity.desc.key)
                     _LOGGER.debug("Value for key %s is %s", entity.desc.key, value)
                 except InvalidValue as err:
-                    # Deliberately left out of `data`: the platforms' "is not None"
+                    # Deliberately not added to `data`: the platforms' "is not None"
                     # guard then skips the update, and availability comes from
-                    # ModbusCoordinatorEntity.available. Warn once - the entity
-                    # vanishes, so the log is the only trace.
+                    # ModbusCoordinatorEntity.available.
                     if entity.desc.key not in self._invalid_keys:
+                        # Once per transition, not every poll.
                         _LOGGER.warning(
                             "%s is unavailable: %s (%s)",
                             entity.desc.key,
