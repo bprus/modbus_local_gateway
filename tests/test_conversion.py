@@ -345,11 +345,7 @@ async def test_unavailable_values(
 
 @pytest.mark.asyncio
 async def test_unavailable_values_matches_before_multiplier() -> None:
-    """The match is against the raw register, not the scaled reading.
-
-    Datasheets document sentinels as raw register contents, so the config lists
-    255 even when a multiplier would turn it into 25.5.
-    """
+    """The match is against the raw register, not the scaled reading."""
     client = AsyncModbusTcpClient
     conversion = Conversion(client=client)
     desc = ModbusSensorEntityDescription(
