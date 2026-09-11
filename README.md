@@ -16,7 +16,7 @@
 
 ## Introduction
 
-This custom Home Assistant integration enables communication with Modbus devices via a Modbus TCP gateway. It uses YAML configuration files to define device registers and coils, mapping them to Home Assistant entities like sensors, switches, numbers, and more. It supports both monitoring (read-only) and control (read/write) operations.
+This custom Home Assistant integration enables communication with Modbus devices via a Modbus TCP gateway. It uses YAML configuration files to define device registers and coils, mapping them to Home Assistant entities like sensors, switches, numbers, water heaters, and more. It supports both monitoring (read-only) and control (read/write) operations.
 
 ## Installation
 
@@ -150,6 +150,59 @@ For all entity definitions:
         "off": 0      # default: 0
       ```
   - `control: text`: Creates a text entity.
+  - `control: water_heater`: Creates a water heater entity.
+    - Unlike every other control this one is a **composite**: it presents a tank as a single
+      entity, built from registers you have already defined. Its own `address` (with `bits` /
+      `shift_bits` if the device packs it) is the **power** field, and the `water_heater` block
+      names the other registers by their entity key — so their scaling, bit geometry and limits
+      are declared once and reused.
+    - E.g.:
+      ```yaml
+      dhw_tank:
+        name: Hot water
+        address: 0             # the power field
+        bits: 1
+        shift_bits: 2
+        control: water_heater
+        water_heater:
+          current_temperature: tank_temperature   # required
+          target_temperature: dhw_setpoint        # enables the temperature control
+          min_temp: dhw_lower_limit               # optional, read from the device
+          max_temp: dhw_upper_limit               # optional, read from the device
+          operation_mode: boost_register          # required by `operations`
+          operations:                             # optional, enables mode selection
+            eco: 0
+            performance: 1
+          away_mode: holiday_register             # optional, enables away mode
+          "on": 1                                 # default: 1
+          "off": 0                                # default: 0
+          away_on: 1                              # default: 1
+          away_off: 0                             # default: 0
+          temperature_precision: 0.5              # optional, see below
+          target_temperature_step: 1              # optional, see below
+      ```
+    - **Roles**: `current_temperature` (required), `target_temperature`,
+      `target_temperature_high`, `target_temperature_low`, `min_temp`, `max_temp`,
+      `operation_mode` and `away_mode`. Each names the key of another entity in the same file.
+      A role naming a register that does not exist is a configuration error and the water heater
+      is not created — as is an unrecognised option, so a misspelt role fails loudly instead of
+      silently going missing.
+    - **What it does for you**: the entity reads the roles whether or not those registers also
+      have entities of their own, and whether or not those entities are enabled — so the
+      registers can be defined with `entity_registry_enabled_default: False` and exist only to
+      feed the water heater. A register shared with another entity is still read only once per
+      poll.
+    - **Defaults worth knowing**: with no `min_temp` / `max_temp` roles, the limits come from the
+      `target_temperature` register's own `number:` `min` and `max`; `target_temperature_step`
+      comes from its `step`. `temperature_precision` defaults to the resolution the
+      `current_temperature` register can actually report (derived from its `multiplier`), so a
+      register counting whole degrees is not displayed as `41.0`. The temperature unit comes from
+      the `current_temperature` role.
+    - `water_heater.set_temperature` writes the `target_temperature` register;
+      `turn_on` / `turn_off` write the power field; `set_operation_mode` writes the
+      `operation_mode` register, turning the device on first if it was off. Selecting `off` writes
+      the power field. `target_temperature_high` and `target_temperature_low` are reported only —
+      the Home Assistant service does not accept them.
 
 - **Data Types**:
   - `signed: true`: Signed integer values rather than the default of unsigned (requires `size: 1`, `size: 2` or `size: 4`).

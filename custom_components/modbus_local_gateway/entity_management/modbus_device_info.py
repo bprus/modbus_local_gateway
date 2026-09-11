@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from os.path import join
 from typing import Any
 
@@ -20,18 +21,19 @@ from .base import (
     ModbusSensorEntityDescription,
     ModbusSwitchEntityDescription,
     ModbusTextEntityDescription,
+    ModbusWaterHeaterEntityDescription,
 )
 from .const import (
     CONTROL_TYPE,
     CONV_BITS,
     CONV_FLAGS,
-    CONV_UNAVAILABLE_VALUES,
     CONV_MAP,
     CONV_MULTIPLIER,
     CONV_OFFSET,
     CONV_SHIFT_BITS,
     CONV_SUM_SCALE,
     CONV_SWAP,
+    CONV_UNAVAILABLE_VALUES,
     DEFAULT_STATE_CLASS,
     DEVICE,
     DEVICE_CLASS,
@@ -52,8 +54,17 @@ from .const import (
     UNIT,
     UOM,
     UOM_MAPPING,
+    WATER_HEATER_OPTIONS,
+    WH_AWAY_OFF,
+    WH_AWAY_ON,
+    WH_OFF,
+    WH_ON,
+    WH_OPERATIONS,
+    WH_TARGET_TEMPERATURE_STEP,
+    WH_TEMPERATURE_PRECISION,
     ControlType,
     ModbusDataType,
+    WaterHeaterRole,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -65,6 +76,7 @@ DESCRIPTION_TYPE = (
     | ModbusSwitchEntityDescription
     | ModbusTextEntityDescription
     | ModbusBinarySensorEntityDescription
+    | ModbusWaterHeaterEntityDescription
 )
 
 
@@ -98,6 +110,7 @@ class ModbusDeviceInfo:
                 ControlType.TEXT,
                 ControlType.SWITCH,
                 ControlType.BINARY_SENSOR,
+                ControlType.WATER_HEATER,
             ],
             ModbusDataType.INPUT_REGISTER: [
                 ControlType.SENSOR,
@@ -159,7 +172,59 @@ class ModbusDeviceInfo:
                         desc := self._create_description(entity, section, entity_data)
                     ):
                         descriptions.append(desc)
-        return tuple(descriptions)
+        return self._resolve_water_heater_roles(descriptions)
+
+    def _resolve_water_heater_roles(
+        self, descriptions: list[DESCRIPTION_TYPE]
+    ) -> tuple[DESCRIPTION_TYPE, ...]:
+        """Bind each water heater's role keys to the descriptions they name.
+
+        A water heater is configured by naming other registers of the same
+        device, so it can only be resolved once every description in the file
+        has been built. A role naming a register that does not exist is a
+        configuration error: the water heater is dropped here rather than left
+        to fail at poll time.
+
+        The bound copies have `scan_interval` cleared. An entity's own
+        `scan_interval` takes it out of the shared refresh - correct for that
+        entity, which polls on its own timer - but it would leave the water
+        heater's copy of that register unpolled whenever the other entity is
+        disabled. Both copies share a key, so they share a value either way.
+        """
+        by_key: dict[str, DESCRIPTION_TYPE] = {desc.key: desc for desc in descriptions}
+        resolved: list[DESCRIPTION_TYPE] = []
+
+        for desc in descriptions:
+            if not isinstance(desc, ModbusWaterHeaterEntityDescription):
+                resolved.append(desc)
+                continue
+
+            problems: list[str] = []
+            for role, key in desc.role_keys.items():
+                target: DESCRIPTION_TYPE | None = by_key.get(key)
+                if target is None:
+                    problems.append(f"{role} names unknown register {key}")
+                elif isinstance(target, ModbusWaterHeaterEntityDescription):
+                    problems.append(f"{role} names another water heater, {key}")
+            if problems:
+                _LOGGER.warning(
+                    "Unable to create entity for %s: %s",
+                    desc.key,
+                    "; ".join(problems),
+                )
+                continue
+
+            resolved.append(
+                replace(
+                    desc,
+                    roles={
+                        role: replace(by_key[key], scan_interval=None)
+                        for role, key in desc.role_keys.items()
+                    },
+                )
+            )
+
+        return tuple(resolved)
 
     def get_uom(self, data, control_type) -> dict[str, str | None]:
         """Get the unit_of_measurement and device class"""
@@ -299,6 +364,8 @@ class ModbusDeviceInfo:
             return self._handle_select_description(params, _data)
         elif control_type == ControlType.NUMBER:
             return self._handle_number_description(params, _data, entity)
+        elif control_type == ControlType.WATER_HEATER:
+            return self._handle_water_heater_description(params, _data, entity)
         elif control_type == ControlType.TEXT:
             return ModbusTextEntityDescription
         else:
@@ -393,6 +460,66 @@ class ModbusDeviceInfo:
                 _LOGGER.warning("Unknown number mode '%s' for %s", mode, entity)
         params["precision"] = _data.get(PRECISION)
         return ModbusNumberEntityDescription
+
+    def _handle_water_heater_description(
+        self, params, _data, entity
+    ) -> None | type[ModbusWaterHeaterEntityDescription]:
+        """Handle water heater description specific logic"""
+        config = _data.get(ControlType.WATER_HEATER, {})
+        if not isinstance(config, dict):
+            _LOGGER.warning(
+                "Water heater configuration for %s should be a dictionary", entity
+            )
+            return None
+
+        # Roles are matched by name, so a typo would otherwise be silent: it
+        # would drop a role rather than fail, and the entity would come up
+        # missing a temperature with nothing logged.
+        unknown: set[str] = set(config) - WATER_HEATER_OPTIONS
+        if unknown:
+            _LOGGER.warning(
+                "Unable to create entity for %s: unknown water_heater option(s) %s",
+                entity,
+                ", ".join(sorted(unknown)),
+            )
+            return None
+
+        role_keys: dict[str, str] = {
+            role.value: config[role.value]
+            for role in WaterHeaterRole
+            if role.value in config
+        }
+        if not all(isinstance(key, str) for key in role_keys.values()):
+            _LOGGER.warning(
+                "Unable to create entity for %s: every water_heater role must name "
+                "another register's key",
+                entity,
+            )
+            return None
+
+        params["role_keys"] = role_keys
+        params["operations"] = config.get(WH_OPERATIONS)
+        params["on"] = config.get(WH_ON, 1)
+        params["off"] = config.get(WH_OFF, 0)
+        params["away_on"] = config.get(WH_AWAY_ON, 1)
+        params["away_off"] = config.get(WH_AWAY_OFF, 0)
+        params["temperature_precision"] = config.get(WH_TEMPERATURE_PRECISION)
+        params["target_temperature_step"] = config.get(WH_TARGET_TEMPERATURE_STEP)
+
+        # A water heater has no unit, device class or state class of its own:
+        # the temperature unit comes from its current_temperature role, and the
+        # domain defines no device classes.
+        if params.pop("native_unit_of_measurement", None) is not None:
+            _LOGGER.warning(
+                "%s: %s is ignored on a water heater, which takes its unit from "
+                "its %s role",
+                entity,
+                UOM,
+                WaterHeaterRole.CURRENT_TEMPERATURE,
+            )
+        params.pop("state_class", None)
+        params.pop("device_class", None)
+        return ModbusWaterHeaterEntityDescription
 
     def _create_description_instance(
         self, desc_cls: type[DESCRIPTION_TYPE], params

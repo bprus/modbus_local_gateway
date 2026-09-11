@@ -84,38 +84,62 @@ class ModbusCoordinatorEntity(CoordinatorEntity):
         self._cancel_timer: Callable[[], None] | None = None
         self._cancel_call: Callable[[], None] | None = None
 
-    async def _read_data(self) -> None:
-        """Update the entity state."""
+    def _contexts_to_read(self) -> list[ModbusContext]:
+        """The registers this entity reads.
+
+        One for every control but the water heater, which composes several.
+        """
+        return [self.coordinator_context]
+
+    async def _read_data(self, ctx: ModbusContext | None = None) -> None:
+        """Update the entity state.
+
+        `ctx` limits the read to a single register - used after a write, where
+        only the register just written can have changed.
+        """
         await asyncio.wait_for(self._update_lock.acquire(), 0.1)
         try:
-            await self.coordinator.async_update_entity(self.coordinator_context)
+            await self.coordinator.async_update_entities(
+                [ctx] if ctx is not None else self._contexts_to_read()
+            )
         finally:
             self._update_lock.release()
 
-    async def _async_update_write_state(self) -> None:
+    async def _async_update_write_state(self, ctx: ModbusContext | None = None) -> None:
         """Update the entity state and write it to the state machine."""
-        await self._read_data()
+        await self._read_data(ctx)
         self._handle_coordinator_update()
 
     async def write_data(
         self,
         value: str | int | float | bool | None,
+        ctx: ModbusContext | None = None,
     ) -> None:
-        """Write data to the Modbus device"""
+        """Write data to the Modbus device
+
+        `ctx` names the register to write, defaulting to the entity's own. Only
+        a composite entity - a water heater - passes it; every other control
+        owns exactly one register.
+        """
+        context: ModbusContext = ctx if ctx is not None else self.coordinator_context
         try:
-            await self.coordinator.client.write_data(self.coordinator_context, value)
+            await self.coordinator.client.write_data(context, value)
         except Exception as exc:  # pylint: disable=broad-except
-            _LOGGER.error(
-                "Failed to write %s to %s: %s", value, self.coordinator_context, exc
-            )
+            _LOGGER.error("Failed to write %s to %s: %s", value, context, exc)
             raise UpdateFailed from exc
 
-        await self._async_update_if_not_in_progress()
+        await self._async_update_if_not_in_progress(ctx=context)
 
-    async def _async_update_if_not_in_progress(self, _=None) -> None:
-        """Update the entity state if not already in progress."""
+    async def _async_update_if_not_in_progress(
+        self, _=None, *, ctx: ModbusContext | None = None
+    ) -> None:
+        """Update the entity state if not already in progress.
+
+        The leading positional is the time argument the timer callbacks pass
+        and nothing uses.
+        """
         try:
-            await self._async_update_write_state()
+            await self._async_update_write_state(ctx)
         except asyncio.TimeoutError:
             _LOGGER.debug("Update for entity %s is already in progress", self.name)
 
@@ -291,6 +315,13 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
             self.async_contexts(), key=lambda x: x.device_id
         )
         entities = [ctx for ctx in entities if ctx.desc.scan_interval is None]
+        # A water heater registers a context for every register it composes, so
+        # the same register can be asked for more than once. `update_device`
+        # issues one transaction per context, and on a slow serial link a
+        # duplicated read is real time on the bus - so collapse them first.
+        entities = list(
+            {(ctx.device_id, ctx.desc.key): ctx for ctx in entities}.values()
+        )
         if not entities:
             # Every entity has its own scan_interval and polls on its own timer,
             # so there is nothing for the shared refresh to fetch.
@@ -343,14 +374,18 @@ class ModbusCoordinator(TimestampDataUpdateCoordinator):
 
         return data
 
-    async def async_update_entity(self, ctx: ModbusContext) -> None:
-        """Update cached data for a specific entity."""
-        data: dict[str, Any] = await self._update_device(entities=[ctx])
+    async def async_update_entities(self, ctxs: list[ModbusContext]) -> None:
+        """Update cached data for specific entities, outside the shared refresh.
+
+        Only the keys that were actually read are merged, so a register that
+        errored or reported a non-value leaves the previous cache entry and its
+        availability alone.
+        """
+        data: dict[str, Any] = await self._update_device(entities=ctxs)
         if data:
             if self.data is None:
                 self.data = {}
-            self.data[ctx.desc.key] = data[ctx.desc.key]
-        return None
+            self.data.update(data)
 
     def is_unavailable(self, ctx: ModbusContext) -> bool:
         """Whether this entity's last read was a declared non-value."""

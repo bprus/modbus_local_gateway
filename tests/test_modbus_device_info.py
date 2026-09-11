@@ -8,7 +8,9 @@ import yaml
 from pytest import LogCaptureFixture
 
 from custom_components.modbus_local_gateway.entity_management.base import (
+    ModbusNumberEntityDescription,
     ModbusSensorEntityDescription,
+    ModbusWaterHeaterEntityDescription,
 )
 from custom_components.modbus_local_gateway.entity_management.const import (
     ModbusDataType,
@@ -404,3 +406,223 @@ async def test_devices_yaml(hass) -> None:
             log.assert_not_called()
             _ = devices[name].model
             log.assert_not_called()
+
+
+WATER_HEATER_YAML = """device:
+        model: Model
+        manufacturer: Manufacturer
+
+read_write_word:
+  dhw_tank:
+    name: Hot water
+    address: 0
+    bits: 1
+    shift_bits: 2
+    control: water_heater
+    water_heater:
+      current_temperature: tank_temperature
+      target_temperature: dhw_setpoint
+      max_temp: dhw_upper_limit
+      operation_mode: boost
+      operations:
+        eco: 0
+        performance: 1
+
+  tank_temperature:
+    name: Tank temperature
+    address: 115
+    unit_of_measurement: Celsius
+
+  dhw_setpoint:
+    name: Setpoint
+    address: 4
+    control: number
+    number:
+      min: 20
+      max: 60
+      step: 1
+
+  dhw_upper_limit:
+    address: 207
+
+  boost:
+    address: 7
+    scan_interval: 5"""
+
+
+def _load(yaml_txt: str) -> ModbusDeviceInfo:
+    """Load a device config from YAML text."""
+    with patch(
+        "custom_components.modbus_local_gateway.entity_management.modbus_device_info.load_yaml"
+    ) as load_yaml:
+        load_yaml.return_value = yaml.full_load(yaml_txt)
+        return ModbusDeviceInfo("test.yaml")
+
+
+def _water_heater(device: ModbusDeviceInfo):
+    """The single water heater description in a device config."""
+    return next(
+        desc
+        for desc in device.entity_descriptions
+        if isinstance(desc, ModbusWaterHeaterEntityDescription)
+    )
+
+
+def test_water_heater_roles_are_resolved() -> None:
+    """Each role is bound to the description its key names."""
+    device = _load(WATER_HEATER_YAML)
+    entities = device.entity_descriptions
+    assert len(entities) == 5
+
+    water_heater = _water_heater(device)
+    assert water_heater.register_address == 0
+    assert water_heater.conv_bits == 1
+    assert water_heater.conv_shift_bits == 2
+    assert water_heater.on == 1
+    assert water_heater.off == 0
+    assert water_heater.operations == {"eco": 0, "performance": 1}
+    assert set(water_heater.roles) == {
+        "current_temperature",
+        "target_temperature",
+        "max_temp",
+        "operation_mode",
+    }
+    assert water_heater.roles["current_temperature"].key == "tank_temperature"
+    assert isinstance(
+        water_heater.roles["target_temperature"], ModbusNumberEntityDescription
+    )
+    # the registers it composes keep their own entities
+    assert {e.key for e in entities} == {
+        "dhw_tank",
+        "tank_temperature",
+        "dhw_setpoint",
+        "dhw_upper_limit",
+        "boost",
+    }
+
+
+def test_water_heater_roles_drop_scan_interval() -> None:
+    """A role's own scan_interval must not take it out of the shared refresh.
+
+    The register's own entity polls on its own timer; the water heater's copy
+    has no timer of its own, so it has to stay in the shared refresh or it
+    would never be read when that entity is disabled.
+    """
+    device = _load(WATER_HEATER_YAML)
+    entities = device.entity_descriptions
+
+    assert next(e for e in entities if e.key == "boost").scan_interval == 5
+    assert _water_heater(device).roles["operation_mode"].scan_interval is None
+
+
+def test_water_heater_rejects_an_unknown_register(
+    caplog: LogCaptureFixture,
+) -> None:
+    """A role naming a register that does not exist is a configuration error."""
+    yaml_txt = WATER_HEATER_YAML.replace(
+        "current_temperature: tank_temperature", "current_temperature: no_such_register"
+    )
+    with caplog.at_level("WARNING"):
+        entities = _load(yaml_txt).entity_descriptions
+
+    assert not any(isinstance(e, ModbusWaterHeaterEntityDescription) for e in entities)
+    assert "names unknown register no_such_register" in caplog.text
+
+
+def test_water_heater_rejects_another_water_heater_as_a_role(
+    caplog: LogCaptureFixture,
+) -> None:
+    """A water heater cannot compose itself, or another one."""
+    yaml_txt = WATER_HEATER_YAML.replace(
+        "current_temperature: tank_temperature", "current_temperature: dhw_tank"
+    )
+    with caplog.at_level("WARNING"):
+        entities = _load(yaml_txt).entity_descriptions
+
+    assert not any(isinstance(e, ModbusWaterHeaterEntityDescription) for e in entities)
+    assert "names another water heater" in caplog.text
+
+
+def test_water_heater_rejects_an_unknown_option(caplog: LogCaptureFixture) -> None:
+    """A misspelt role must fail loudly, not quietly go missing."""
+    yaml_txt = WATER_HEATER_YAML.replace(
+        "current_temperature: tank_temperature",
+        "current_temperature: tank_temperature\n      current_temp: tank_temperature",
+    )
+    with caplog.at_level("WARNING"):
+        entities = _load(yaml_txt).entity_descriptions
+
+    assert not any(isinstance(e, ModbusWaterHeaterEntityDescription) for e in entities)
+    assert "unknown water_heater option(s) current_temp" in caplog.text
+
+
+def test_water_heater_rejects_a_non_dict_block(caplog: LogCaptureFixture) -> None:
+    """The water_heater block holds roles and settings, so it must be a mapping."""
+    yaml_txt = """device:
+        model: Model
+        manufacturer: Manufacturer
+
+read_write_word:
+  dhw_tank:
+    address: 0
+    control: water_heater
+    water_heater: true
+
+  tank_temperature:
+    address: 115"""
+    with caplog.at_level("WARNING"):
+        entities = _load(yaml_txt).entity_descriptions
+
+    assert not any(isinstance(e, ModbusWaterHeaterEntityDescription) for e in entities)
+    assert "should be a dictionary" in caplog.text
+
+
+def test_water_heater_rejects_a_non_string_role(caplog: LogCaptureFixture) -> None:
+    """A role names another register's key, not a value."""
+    yaml_txt = WATER_HEATER_YAML.replace(
+        "current_temperature: tank_temperature", "current_temperature: 115"
+    )
+    with caplog.at_level("WARNING"):
+        entities = _load(yaml_txt).entity_descriptions
+
+    assert not any(isinstance(e, ModbusWaterHeaterEntityDescription) for e in entities)
+    assert "must name another register's key" in caplog.text
+
+
+def test_water_heater_not_allowed_on_a_coil(caplog: LogCaptureFixture) -> None:
+    """A water heater needs a holding register: a coil holds one bit."""
+    yaml_txt = """device:
+        model: Model
+        manufacturer: Manufacturer
+
+read_write_boolean:
+  dhw_tank:
+    address: 0
+    control: water_heater
+    water_heater:
+      current_temperature: tank_temperature
+
+read_write_word:
+  tank_temperature:
+    address: 115"""
+    with caplog.at_level("WARNING"):
+        entities = _load(yaml_txt).entity_descriptions
+
+    assert not any(isinstance(e, ModbusWaterHeaterEntityDescription) for e in entities)
+    assert "Invalid control_type water_heater" in caplog.text
+
+
+def test_water_heater_ignores_a_unit_of_measurement(
+    caplog: LogCaptureFixture,
+) -> None:
+    """A water heater takes its unit from its tank temperature, not its own config."""
+    yaml_txt = WATER_HEATER_YAML.replace(
+        "    control: water_heater",
+        "    unit_of_measurement: Celsius\n    control: water_heater",
+    )
+    with caplog.at_level("WARNING"):
+        device = _load(yaml_txt)
+        water_heater = _water_heater(device)
+
+    assert water_heater is not None
+    assert "takes its unit from its current_temperature role" in caplog.text

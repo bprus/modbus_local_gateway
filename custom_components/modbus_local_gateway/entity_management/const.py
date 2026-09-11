@@ -69,6 +69,50 @@ class ControlType(StrEnum):
     TEXT = "text"
     NUMBER = "number"
     BINARY_SENSOR = "binary_sensor"
+    WATER_HEATER = "water_heater"
+
+
+class WaterHeaterRole(StrEnum):
+    """The registers a water heater composes, as named in its `water_heater` block.
+
+    Each value is the YAML key of another register of the same device, so a
+    water heater reuses those registers' scaling, bit geometry and limits
+    instead of redeclaring them.
+    """
+
+    CURRENT_TEMPERATURE = "current_temperature"
+    TARGET_TEMPERATURE = "target_temperature"
+    TARGET_TEMPERATURE_HIGH = "target_temperature_high"
+    TARGET_TEMPERATURE_LOW = "target_temperature_low"
+    MIN_TEMP = "min_temp"
+    MAX_TEMP = "max_temp"
+    OPERATION_MODE = "operation_mode"
+    AWAY_MODE = "away_mode"
+
+
+# Settings, as opposed to roles, inside the `water_heater` block.
+WH_OPERATIONS = "operations"
+WH_ON = "on"
+WH_OFF = "off"
+WH_AWAY_ON = "away_on"
+WH_AWAY_OFF = "away_off"
+WH_TEMPERATURE_PRECISION = "temperature_precision"
+WH_TARGET_TEMPERATURE_STEP = "target_temperature_step"
+
+WATER_HEATER_SETTINGS: frozenset[str] = frozenset(
+    {
+        WH_OPERATIONS,
+        WH_ON,
+        WH_OFF,
+        WH_AWAY_ON,
+        WH_AWAY_OFF,
+        WH_TEMPERATURE_PRECISION,
+        WH_TARGET_TEMPERATURE_STEP,
+    }
+)
+WATER_HEATER_OPTIONS: frozenset[str] = WATER_HEATER_SETTINGS | frozenset(
+    role.value for role in WaterHeaterRole
+)
 
 
 class Units(StrEnum):

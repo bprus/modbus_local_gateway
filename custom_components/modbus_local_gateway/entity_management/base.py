@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntityDescription
 from homeassistant.components.number import NumberEntityDescription, NumberMode
@@ -11,16 +12,17 @@ from homeassistant.components.select import SelectEntityDescription
 from homeassistant.components.sensor import SensorEntityDescription
 from homeassistant.components.switch import SwitchEntityDescription
 from homeassistant.components.text import TextEntityDescription
+from homeassistant.components.water_heater import WaterHeaterEntityDescription
 from homeassistant.helpers.entity import EntityDescription
 
 from .const import (
     CONV_BITS,
-    CONV_UNAVAILABLE_VALUES,
     CONV_MULTIPLIER,
     CONV_OFFSET,
     CONV_SHIFT_BITS,
     CONV_SUM_SCALE,
     CONV_SWAP,
+    CONV_UNAVAILABLE_VALUES,
     IS_FLOAT,
     IS_SIGNED,
     IS_STRING,
@@ -29,6 +31,7 @@ from .const import (
     REGISTER_COUNT,
     ControlType,
     ModbusDataType,
+    WaterHeaterRole,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -55,6 +58,7 @@ class UnusedKeysMixin:
     control: str | None = ControlType.SENSOR  # control_type
     number: dict[str, int] | None = None  # min, max
     switch: dict[str, float] | None = None  # on, off
+    water_heater: dict[str, Any] | None = None  # roles and settings
 
 
 @dataclass(kw_only=True, frozen=True)
@@ -148,6 +152,7 @@ class ModbusEntityDescription(
             ControlType.NUMBER,
             ControlType.SWITCH,
             ControlType.SELECT,
+            ControlType.WATER_HEATER,
         ):
             return True
 
@@ -343,6 +348,97 @@ class ModbusNumberEntityDescription(NumberEntityDescription, ModbusEntityDescrip
     max: int
     min: int
     mode: NumberMode | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class ModbusWaterHeaterEntityDescription(
+    WaterHeaterEntityDescription, ModbusEntityDescription
+):
+    """Describes a Modbus water heater holding register entity.
+
+    The only composite control: `register_address` is the on/off field, and the
+    temperatures come from other registers of the same device. `role_keys` is
+    what the YAML said - a role name against another register's key - and
+    `roles` is the same map once `ModbusDeviceInfo` has resolved those keys to
+    the descriptions they name.
+    """
+
+    role_keys: dict[str, str]
+    roles: dict[str, ModbusEntityDescription] = field(default_factory=dict)
+    operations: dict[str, int] | None = None
+    on: int = 1
+    off: int = 0
+    away_on: int = 1
+    away_off: int = 0
+    temperature_precision: float | None = None
+    target_temperature_step: float | None = None
+
+    def validate(self) -> bool:
+        """Validate the entity description
+
+        Only what can be judged from this entity alone. Whether the role keys
+        name registers that exist is settled later, by `ModbusDeviceInfo`,
+        which is the first place the rest of the file is known.
+        """
+        if not super().validate():
+            return False
+        if not self._validate_roles():
+            return False
+        if not self._validate_operations():
+            return False
+        if self.on == self.off:
+            _LOGGER.warning(
+                "Unable to create entity for %s: on and off cannot be the same value",
+                self.key,
+            )
+            return False
+        return True
+
+    def _validate_roles(self) -> bool:
+        """A water heater with no tank temperature has nothing to show."""
+        if WaterHeaterRole.CURRENT_TEMPERATURE not in self.role_keys:
+            _LOGGER.warning(
+                "Unable to create entity for %s: a water heater needs a %s role",
+                self.key,
+                WaterHeaterRole.CURRENT_TEMPERATURE,
+            )
+            return False
+        return True
+
+    def _validate_operations(self) -> bool:
+        """Modes need a register to live in, and a value each."""
+        if self.operations is None:
+            return True
+        if not isinstance(self.operations, dict) or not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in self.operations.values()
+        ):
+            _LOGGER.warning(
+                "Unable to create entity for %s: operations must map a mode name "
+                "to a whole register value",
+                self.key,
+            )
+            return False
+        if not self.operations:
+            return True
+        if WaterHeaterRole.OPERATION_MODE not in self.role_keys:
+            _LOGGER.warning(
+                "Unable to create entity for %s: operations need an %s role to "
+                "read and write them",
+                self.key,
+                WaterHeaterRole.OPERATION_MODE,
+            )
+            return False
+        if len(set(self.operations.values())) != len(self.operations):
+            # Two modes on one value cannot both be read back, so one of them
+            # would be permanently unreachable in the UI.
+            _LOGGER.warning(
+                "Unable to create entity for %s: operations must not share a "
+                "register value",
+                self.key,
+            )
+            return False
+        return True
 
 
 @dataclass(kw_only=True, frozen=True)

@@ -194,7 +194,7 @@ async def test_write_data_success() -> None:
 
     coordinator = MagicMock()
     coordinator.client.write_data = AsyncMock()
-    coordinator.async_update_entity = AsyncMock()
+    coordinator.async_update_entities = AsyncMock()
     ctx = ModbusContext(
         1,
         ModbusSensorEntityDescription(
@@ -210,7 +210,7 @@ async def test_write_data_success() -> None:
 
     await entity.write_data("value")
     coordinator.client.write_data.assert_called_once_with(ctx, "value")
-    coordinator.async_update_entity.assert_called_once()
+    coordinator.async_update_entities.assert_called_once_with([ctx])
     entity._handle_coordinator_update.assert_called_once()
 
 
@@ -414,7 +414,7 @@ async def test_async_update_if_not_in_progress_locked(
 ) -> None:
     """Test _async_update_if_not_in_progress does nothing if lock is held."""
     coordinator = AsyncMock()
-    coordinator.async_update_entity = AsyncMock()
+    coordinator.async_update_entities = AsyncMock()
     ctx = ModbusContext(
         1,
         ModbusSensorEntityDescription(
@@ -431,7 +431,7 @@ async def test_async_update_if_not_in_progress_locked(
     entity.name = "test_entity"
     with caplog.at_level("DEBUG"):
         await entity._async_update_if_not_in_progress()
-        coordinator.async_update_entity.assert_not_called()
+        coordinator.async_update_entities.assert_not_called()
         assert "Update for entity test_entity is already in progress" in caplog.text
 
 
@@ -614,8 +614,8 @@ async def test_async_will_remove_from_hass_calls_super_and_cancels() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_update_entity(mock_config_entry: ConfigEntry) -> None:
-    """Test async_update_entity calls _update_device."""
+async def test_async_update_entities(mock_config_entry: ConfigEntry) -> None:
+    """Test async_update_entities calls _update_device and merges what it read."""
     hass = MagicMock()
     gateway = MagicMock()
     client = MagicMock()
@@ -646,19 +646,19 @@ async def test_async_update_entity(mock_config_entry: ConfigEntry) -> None:
 
     coordinator._update_device = AsyncMock()
     coordinator._update_device.return_value = None
-    await coordinator.async_update_entity(ctx1)
+    await coordinator.async_update_entities([ctx1])
     coordinator._update_device.assert_called_once()
 
     coordinator._update_device.return_value = {"test1": "value1"}
-    await coordinator.async_update_entity(ctx1)
+    await coordinator.async_update_entities([ctx1])
     assert coordinator.data == {"test1": "value1"}
 
     coordinator._update_device.return_value = {"test2": "value2"}
-    await coordinator.async_update_entity(ctx2)
+    await coordinator.async_update_entities([ctx2])
     assert coordinator.data == {"test1": "value1", "test2": "value2"}
 
     coordinator._update_device.return_value = {"test2": "value3"}
-    await coordinator.async_update_entity(ctx2)
+    await coordinator.async_update_entities([ctx2])
     assert coordinator.data == {"test1": "value1", "test2": "value3"}
 
 
@@ -693,7 +693,7 @@ async def test_async_update_with_no_coordinator_entities(
             ),
         )
     ]
-    # what the entity's own timer already stored, via async_update_entity
+    # what the entity's own timer already stored, via async_update_entities
     coordinator.data = {"own_timer": 42}
 
     with patch(
@@ -705,6 +705,96 @@ async def test_async_update_with_no_coordinator_entities(
 
     assert result == {"own_timer": 42}  # existing data preserved, not wiped
     client.update_device.assert_not_called()  # nothing was polled
+
+
+@pytest.mark.asyncio
+async def test_async_update_reads_a_shared_register_once(
+    mock_config_entry: ConfigEntry,
+) -> None:
+    """A register asked for twice must only be read once.
+
+    A water heater registers a context for every register it composes, so a
+    register that also has its own entity is asked for twice. `update_device`
+    issues one Modbus transaction per context, and on a slow serial link a
+    duplicated read is real time on the bus.
+    """
+    coordinator = _coordinator(mock_config_entry)
+    coordinator._update_device = AsyncMock(return_value={"shared": 1, "other": 2})
+
+    def ctx(key: str, device_id: int = 1) -> ModbusContext:
+        return ModbusContext(
+            device_id,
+            ModbusSensorEntityDescription(
+                register_address=1,
+                key=key,
+                data_type=ModbusDataType.HOLDING_REGISTER,
+            ),
+        )
+
+    with patch(
+        "custom_components.modbus_local_gateway.coordinator."
+        "ModbusCoordinator.async_contexts",
+        return_value=[ctx("shared"), ctx("other"), ctx("shared")],
+    ):
+        await coordinator.async_update()
+
+    polled = coordinator._update_device.call_args.kwargs["entities"]
+    assert [c.desc.key for c in polled] == ["shared", "other"]
+
+
+@pytest.mark.asyncio
+async def test_async_update_keeps_a_key_per_device(
+    mock_config_entry: ConfigEntry,
+) -> None:
+    """The same key on two device ids is two registers, not a duplicate."""
+    coordinator = _coordinator(mock_config_entry)
+    coordinator._update_device = AsyncMock(return_value={"same": 1})
+
+    def ctx(device_id: int) -> ModbusContext:
+        return ModbusContext(
+            device_id,
+            ModbusSensorEntityDescription(
+                register_address=1,
+                key="same",
+                data_type=ModbusDataType.HOLDING_REGISTER,
+            ),
+        )
+
+    with patch(
+        "custom_components.modbus_local_gateway.coordinator."
+        "ModbusCoordinator.async_contexts",
+        return_value=[ctx(1), ctx(2)],
+    ):
+        await coordinator.async_update()
+
+    polled = coordinator._update_device.call_args.kwargs["entities"]
+    assert [c.device_id for c in polled] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_async_update_entities_merges_only_what_was_read(
+    mock_config_entry: ConfigEntry,
+) -> None:
+    """A register that could not be read leaves its previous value alone."""
+    coordinator = _coordinator(mock_config_entry)
+    coordinator.data = {"first": 1, "second": 2}
+
+    def ctx(key: str) -> ModbusContext:
+        return ModbusContext(
+            1,
+            ModbusSensorEntityDescription(
+                register_address=1,
+                key=key,
+                data_type=ModbusDataType.HOLDING_REGISTER,
+            ),
+        )
+
+    coordinator._update_device = AsyncMock(return_value={"first": 9})
+    await coordinator.async_update_entities([ctx("first"), ctx("second")])
+
+    assert coordinator.data == {"first": 9, "second": 2}
+
+
 def _coordinator(mock_config_entry: ConfigEntry) -> ModbusCoordinator:
     """Build a coordinator with everything around it mocked."""
     return ModbusCoordinator(

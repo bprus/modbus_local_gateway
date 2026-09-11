@@ -12,6 +12,7 @@ PLATFORMS: list[Platform] = [
     Platform.SELECT,
     Platform.SWITCH,
     Platform.TEXT,
+    Platform.WATER_HEATER,
 ]
 
 CONF_CONNECTION_TYPES: dict[str, str] = {
